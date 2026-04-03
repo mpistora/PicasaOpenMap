@@ -58,3 +58,11 @@ Leaflet currently [supports IE 9–11](https://leafletjs.com/#features). However
 If anyone wants to improve this, I have two suggestions:
 * instead of `leaflet.js` use `leaflet-src.js`, which is more readable
 * for debugging use `C:\Windows\System32\F12\IEChooser.exe`
+
+## Sample Screenshot
+
+Here are some sample screenshots of how the Map panel looks like with OpenStreetMap and OpenTopoMap:
+
+![OSM Image](sample/20250810-osm.png)
+
+![Topo Image](sample/20250810-topo.png)

@@ -384,6 +384,9 @@ function picasa_initialize(a, b, d, c, e) {
     //        draggable: !0,
     //      },
     //      h = new google.maps.Map(document.getElementById('map_canvas'), g);
+
+    // Windows7: if tiles won't load, try openstreetmap.de instead
+    //   https://leaflet-extras.github.io/leaflet-providers/preview/
     var osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     	minZoom: 0,
       maxZoom: 19,
@@ -394,13 +397,22 @@ function picasa_initialize(a, b, d, c, e) {
     	maxZoom: 19,
     	attribution: '&copy; Powered by Esri'
     });
+    var topoMap = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+      maxZoom: 17,
+      attribution: '&copy; OpenStreetMap'
+    });
+
     var h = L.map('map_canvas', { zoomControl:false, zoomAnimation:false, fadeAnimation:false, markerZoomAnimation:false, layers:[osm]}).setView([40.979898, -98.261719], 4);
     var baseMaps = {
       "OpenStreetMap": osm,
+      "OpenTopoMap": topoMap,
       "Esri.WorldImagery": sat
     };
-    var layerControl = L.control.layers(baseMaps, null, {position: 'bottomright'}).addTo(h);
-    L.control.zoom({position: 'bottomleft'}).addTo(h);
+
+    L.control.layers(baseMaps).addTo(h);
+    L.control.zoom().addTo(h);
+    L.control.scale().addTo(h);
+
     //    b = {};
     //    d = {};
     //    b.v3 = {};
