@@ -5,9 +5,10 @@
   All Rights Reserved
 -->
 <head>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <meta http-equiv="content-type" content="text/html; charset=utf-8" />
-  <title>Google Map for Picasa Locations</title>
-  <!-- <link rel="stylesheet" type="text/css" href="picasa_infowindow.css" /> -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Map for Picasa Locations</title>
   <style>
     html,
     body {
@@ -23,7 +24,7 @@
       border: 1px solid #979797;
     }
     #errorDiv {
-      font-color: black;
+      color: black;
       font-family: arial;
       font-size: 12px;
       position: absolute;
@@ -31,10 +32,10 @@
       left: 5px;
       width: 98%;
       height: 200px;
-      overflow-y:auto
+      overflow-y: auto;
     }
     #searchErrorDiv {
-      font-color: black;
+      color: black;
       font-family: Arial;
       font-weight: bold;
       font-size: 12pt;
@@ -59,79 +60,76 @@
       top: 12px;
       left: 34px;
     }
-/* picasa_infowindow.css file did not load on some computers via the link tag, so we will insert it here */ 
+/* picasa_infowindow.css file did not load on some computers via the link tag, so we will insert it here */
 a {
-  text-decoration:none;
+  text-decoration: none;
 }
 a:link {
-  color:#4488ff;
-  text-decoration:none;
+  color: #4488ff;
+  text-decoration: none;
 }
 a:visited {
-  color:#4488ff;
-  text-decoration:none;
+  color: #4488ff;
+  text-decoration: none;
 }
 
-a img { border: none ; }
+a img { border: none; }
 
 .info_window_bottom_image {
-  background-color:#ffffff;
-  border:1px #cdcdcd solid;
+  background-color: #ffffff;
+  border: 1px #cdcdcd solid;
 }
 .info_window_title {
-  /* background-color:#aaaaff;*/  /* default white background for now */
-  font-family:Arial;
-  font-weight:bold;
-  font-size:10pt;
-  border-bottom:1px solid #bbbbbb;
-  text-align:center;
-  white-space:normal;
+  font-family: Arial;
+  font-weight: bold;
+  font-size: 10pt;
+  border-bottom: 1px solid #bbbbbb;
+  text-align: center;
+  white-space: normal;
 }
 .info_window_close {
-  float:right;
-  padding-right:6px;
-  padding-top:1px;
-  border:0;
+  float: right;
+  padding-right: 6px;
+  padding-top: 1px;
+  border: 0;
 }
 .info_window_footer {
-  font-family:Arial;
-  font-style:normal;
-  font-size:11px;
-  font-weight:lighter;
-  border-top:1px solid #bbbbbb;
-  text-indent:5px;
+  font-family: Arial;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: lighter;
+  border-top: 1px solid #bbbbbb;
+  text-indent: 5px;
 }
 .info_window_footer_button {
-  font-family:Arial;
-  font-style:normal;
-  font-size:11px;
-  font-weight:normal;
+  font-family: Arial;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: normal;
   margin: 1px;
-  padding:1px;
-  border:1px solid #bbbbbb;
-  text-align:center;
-  cursor:pointer;
-  width:92%;
-  white-space:normal;
+  padding: 1px;
+  border: 1px solid #bbbbbb;
+  text-align: center;
+  cursor: pointer;
+  width: 92%;
+  white-space: normal;
 }
 .info_window_thumb {
-  text-align:center;
-  vertical-align:middle;
-  margin-top:5px;
+  text-align: center;
+  vertical-align: middle;
+  margin-top: 5px;
 }
 .info_window_controls {
-  text-align:center;
-  vertical-align:bottom;
-  border-top:1px solid #bbbbbb;
+  text-align: center;
+  vertical-align: bottom;
+  border-top: 1px solid #bbbbbb;
 }
 .info_window_footerblock {
-  display:block;
-  width:50px;
-  height:100%;
+  display: block;
+  width: 50px;
+  height: 100%;
 }
   </style>
-  <!-- <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/webcomponentsjs/2.0.0/webcomponents-bundle.js"></script> -->
-  <!-- <script type="text/javascript" src="https://maps.googleapis.com/maps/api/js?client=google-picasa-client&sensor=false&v=3.53"></script> -->
   <link rel="stylesheet" href="leaflet.css" />
   <script src="leaflet.js"></script>
   <script type="text/javascript" src="picasa_geopanel_bin_v3.js"></script>
@@ -139,7 +137,7 @@ a img { border: none ; }
 <body>
   <div id="map_canvas"></div>
   <div id="addMarkerDiv"><img id="addMarker" src="addmarker.png" alt="Add a new place for the currently selected photos" ondragstart="return false" onselectstart="return false" onclick="picasa.notifyPicasa('addMarker');"></div>
-  <div id="errorDiv" style="display:none">Picasa failed to initialize Google Maps.
+  <div id="errorDiv" style="display:none">Picasa failed to initialize the map.
     Please make sure that you are connected to the Internet.</div>
   <div id="searchErrorDiv" style="display:none" onclick="document.getElementById('searchErrorDiv').style.display = 'none';">
     <br />Sorry, search failed.<br />Please try a different address.<br /><br />(Click to close)
@@ -147,4 +145,3 @@ a img { border: none ; }
   <div id="hiddenDiv" style="display:none" checksum="-1" markindex="-1" latlng=""></div>
 </body>
 </html>
-
