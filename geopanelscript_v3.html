@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html xmlns:v="urn:schemas-microsoft-com:vml">
 <!--
   Copyright 2013 Google Inc.
@@ -31,7 +31,8 @@
       left: 5px;
       width: 98%;
       height: 200px;
-      overflow-y:auto
+      overflow-y:auto;
+      z-index: 2000; /* [geotag] otherwise hidden below the Leaflet map */
     }
     #searchErrorDiv {
       font-color: black;
@@ -46,6 +47,8 @@
       height: 100px;
       background-color: #ffffff;
       border: 1px #cdcdcd solid;
+      z-index: 2000; /* [geotag] otherwise hidden below the Leaflet map */
+      cursor: pointer;
     }
     #hiddenDiv {
       position: absolute;
@@ -58,6 +61,15 @@
       position: absolute;
       top: 12px;
       left: 34px;
+    }
+    /* [geotag] "add a place" button, placed below the zoom buttons */
+    .picasa-addmarker {
+      background: #ffffff;
+      padding: 3px;
+      line-height: 0;
+    }
+    .picasa-addmarker img {
+      cursor: pointer;
     }
 /* picasa_infowindow.css file did not load on some computers via the link tag, so we will insert it here */ 
 a {
@@ -132,11 +144,39 @@ a img { border: none ; }
   </style>
   <!-- <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/webcomponentsjs/2.0.0/webcomponents-bundle.js"></script> -->
   <!-- <script type="text/javascript" src="https://maps.googleapis.com/maps/api/js?client=google-picasa-client&sensor=false&v=3.53"></script> -->
+  <!-- [geotag] Diagnostics: collects errors (including script loading errors) and shows
+       a status line when picasa.DEBUG = true or when something is missing. -->
+  <script type="text/javascript">
+    window.__diagErrors = [];
+    window.onerror = function (m, u, l) {
+      window.__diagErrors.push(m + ' (' + String(u).split('/').pop() + ':' + l + ')');
+      return false;
+    };
+    window.__diagShow = function () {
+      try {
+        var ok = window.L && window.picasa && window.picasa.toUrlValue && !window.__diagErrors.length;
+        var dbg = window.picasa && window.picasa.DEBUG;
+        if (dbg && window.picasa.debugShow) window.picasa.debugShow();
+        if (ok && !dbg) return;
+        var d = document.createElement('div');
+        d.id = 'diagDiv';
+        d.style.cssText = 'position:absolute;top:0;left:0;right:0;z-index:20000;background:#ffffcc;' +
+          'font:11px Consolas,monospace;padding:3px;border-bottom:1px solid #999;';
+        var t = 'Diagnostics - IE document mode: ' + document.documentMode +
+          ' | Leaflet: ' + (window.L ? window.L.version : 'MISSING') +
+          ' | geotag script: ' + (window.picasa && window.picasa.toUrlValue ? 'OK' : 'MISSING') +
+          ' | errors: ' + (window.__diagErrors.length ? window.__diagErrors.join(' ; ') : 'none');
+        d.innerText = t;
+        d.textContent = t;
+        document.body.appendChild(d);
+      } catch (e) {}
+    };
+  </script>
   <link rel="stylesheet" href="leaflet.css" />
   <script src="leaflet.js"></script>
   <script type="text/javascript" src="picasa_geopanel_bin_v3.js"></script>
 </head>
-<body>
+<body onload="window.__diagShow &amp;&amp; window.__diagShow();">
   <div id="map_canvas"></div>
   <div id="addMarkerDiv"><img id="addMarker" src="addmarker.png" alt="Add a new place for the currently selected photos" ondragstart="return false" onselectstart="return false" onclick="picasa.notifyPicasa('addMarker');"></div>
   <div id="errorDiv" style="display:none">Picasa failed to initialize Google Maps.
