@@ -1,25 +1,70 @@
+// =====================================================================
+//  PicasaOpenMap - geotag editing
+//  Restores the editing features of the Picasa Places panel on top of the
+//  Leaflet port: "add a place" button, drag & drop of photos from Picasa,
+//  moving an existing marker, erasing coordinates, and place search
+//  (via Nominatim / OpenStreetMap instead of the Google geocoder).
+//  Changes compared to the Leaflet port are marked with  // [geotag]
+// =====================================================================
+
 var picasa = picasa || {};
+
+// [geotag] Set to true to show a diagnostic log at the bottom of the map.
+picasa.DEBUG = false;
+
+// [geotag] Initial map view when no geotagged photo is selected
+//          (the original Google version used the USA: [40.979898, -98.261719], zoom 4).
+picasa.DEFAULT_CENTER = [40.979898, -98.261719];
+picasa.DEFAULT_ZOOM = 4;
+
+picasa._debugLines = [];
+picasa.debugShow = function (a) {
+  try {
+    if (undefined !== a) {
+      picasa._debugLines.push(String(a));
+      if (picasa._debugLines.length > 60) picasa._debugLines.shift();
+    }
+    if (!document.body) return; // shown later, on page load
+    var div = document.getElementById('debugDiv');
+    if (!div) {
+      div = document.createElement('div');
+      div.id = 'debugDiv';
+      div.style.cssText =
+        'position:absolute;bottom:0;left:0;right:0;max-height:40%;overflow-y:auto;' +
+        'background:#ffffff;opacity:0.9;font:10px Consolas,monospace;z-index:10000;' +
+        'padding:2px;white-space:pre-wrap;border-top:1px solid #999;';
+      document.body.appendChild(div);
+    }
+    div.textContent = picasa._debugLines.join('\n');
+    div.scrollTop = div.scrollHeight;
+  } catch (e) {}
+};
 picasa.initLog =
   picasa.initLog ||
   function () {
-    picasa.log =
-      'undefined' !== typeof console && null !== console ?
-      function (a) {
-        window.console.log(a);
-      } :
-      function () {};
+    picasa.log = function (a) {
+      try {
+        'undefined' !== typeof console && null !== console && window.console.log(a);
+      } catch (e) {}
+      picasa.DEBUG && picasa.debugShow(a);
+    };
   };
 showError = function(l) {
   return (
-    picasa.log('Error: ' + l),
-//     (document.getElementById('errorDiv').style.display = 'block'),
-//     (document.getElementById('errorDiv').innerText = l.stack),
-//     (document.getElementById('addMarkerDiv').style.display = 'none'),
-//     (document.getElementById('map_canvas').style.display = 'none'),
+    picasa.log('Error: ' + l + (l && l.stack ? '\n' + l.stack : '')),
     !1
   );
 };
 picasa.initLog();
+// [geotag] Also log uncaught JavaScript errors
+//          (and forward them to the diagnostic collector of the HTML page).
+picasa._prevOnError = window.onerror;
+window.onerror = function (msg, url, line, col) {
+  picasa.log('JS error: ' + msg + ' (line ' + line + (col ? ':' + col : '') + ')');
+  return picasa._prevOnError ? picasa._prevOnError.apply(this, arguments) : false;
+};
+picasa.log('geotag script loaded - IE document mode: ' + document.documentMode + ' - Leaflet: ' + (window.L ? L.version : 'missing'));
+
 var picasaInfoWindow$style = function (a, b, d, c) {
     picasa.log('picasaInfoWindow$style -  a: ' + a + ', b: ' + b + ', d: ' + d + ', c: ' + c);
     this.bottomImage_ = a;
@@ -32,27 +77,7 @@ var picasaInfoWindow$style = function (a, b, d, c) {
     1 < a.indexOf('macintosh') && (b = 4); -
     1 < a.indexOf('msie') && 1 > a.indexOf('opera') && (b = 0);
     this.browserAdjustment_ = b;
-//   },
   };
-//   picasaInfoWindow$window = function (a, b) {
-//     picasa.log('picasaInfoWindow$window -  a: ' + a + ', b: ' + b);
-//     this.doc_ = a;
-//     this.style_ = b;
-//     this.infoWindowWidth_ = 180;
-//     this.isIE_ = this.visible_ = !1;
-//     this.autoPanning_ = !0;
-//     //  this.infoWindowOffset_ = new google.maps.Point(0, 0);
-//     this.infoWindowOffset_ = L.point(0, 0);
-//     var d = navigator.userAgent.toLowerCase();
-//     this.isIE_ = -1 < d.indexOf('msie') && 1 > d.indexOf('opera');
-//     this.infoWindowDiv_ = this.createInfoWindowDiv(this.infoWindowWidth_);
-//     this.bottomImageDiv_ = this.createInfoWindowDiv(this.style_.bottomImageSize_.width);
-//   };
-// try {
-//   picasaInfoWindow$window.prototype = new google.maps.OverlayView();
-// } catch (err) {
-//   console.log('Overlay failed: ' + err);
-// }
 var picasaInfoWindow$window = L.Layer.extend({
 
   initialize: function (a, b) {
@@ -62,68 +87,53 @@ var picasaInfoWindow$window = L.Layer.extend({
     this.infoWindowWidth_ = 180;
     this.isIE_ = this.visible_ = !1;
     this.autoPanning_ = !0;
-    //  this.infoWindowOffset_ = new google.maps.Point(0, 0);
     this.infoWindowOffset_ = L.point(0, 0);
     var d = navigator.userAgent.toLowerCase();
     this.isIE_ = -1 < d.indexOf('msie') && 1 > d.indexOf('opera');
     this.infoWindowDiv_ = this.createInfoWindowDiv(this.infoWindowWidth_);
     this.bottomImageDiv_ = this.createInfoWindowDiv(this.style_.bottomImageSize_.width);
-    
+    // [geotag] A click inside the info window (OK, Cancel...) must not be seen as a click on the map.
+    L.DomEvent.disableClickPropagation(this.infoWindowDiv_);
+    L.DomEvent.disableClickPropagation(this.bottomImageDiv_);
+
     L.setOptions(this, { pane: 'popupPane' });
   },
 
-// picasaInfoWindow$window.prototype.AttachToMap = function (a) {
   AttachToMap: function (a) {
     picasa.log('picasaInfoWindow$window.AttachToMap -  a: ' + a);
     null != this.map_ &&
-      (console.log(
+      (picasa.log(
           'implicit detach in picasaInfoWindow.window.prototype.AttachToMap'
         ),
         this.DetachFromMap());
     this.map_ = a;
-    //  this.setMap(a);
     this.addTo(a);
-  // };
   },
-// picasaInfoWindow$window.prototype.DetachFromMap = function () {
-    DetachFromMap: function () {
+  DetachFromMap: function () {
     picasa.log('picasaInfoWindow$window.DetachFromMap');
     this.setShow(!1);
-    //  this.setMap(null);
     this.remove();
     this.map_ = null;
-  // };
   },
-// picasaInfoWindow$window.prototype.onAdd = function () {
   onAdd: function () {
     picasa.log('picasaInfoWindow$window.onAdd');
-    //  var a = this.getPanes();
     var a = this.getPane();
-    //  a.floatPane.appendChild(this.infoWindowDiv_);
     a.appendChild(this.infoWindowDiv_);
-    //  a.floatPane.appendChild(this.bottomImageDiv_);
     a.appendChild(this.bottomImageDiv_);
-    
+
     this.map_.on('zoomend viewreset', this.draw, this);
-  // };
   },
-// picasaInfoWindow$window.prototype.createInfoWindowDiv = function (a) {
   createInfoWindowDiv: function (a) {
     picasa.log('picasaInfoWindow$window.createInfoWindowDiv -  a: ' + a);
     var b = this.doc_.createElement('div');
     b.style.position = 'absolute';
     b.style.width = a + 'px';
     return b;
-  // };
   },
-// picasaInfoWindow$window.prototype.setPosition = function (a, b, d) {
   setPosition: function (a, b, d) {
-    picasa.log('picasaInfoWindow$window.setPosition -  a: ' + a + ', b: ' + b + ', d: ' + d);
     a.style.left = b + 'px';
     a.style.bottom = d + 'px';
-  // };
   },
-// picasaInfoWindow$window.prototype.onRemove = function () {
   onRemove: function () {
     picasa.log('picasaInfoWindow$window.onRemove');
     this.infoWindowDiv_ &&
@@ -133,25 +143,14 @@ var picasaInfoWindow$window = L.Layer.extend({
       this.bottomImageDiv_.parentNode &&
       this.bottomImageDiv_.parentNode.removeChild(this.bottomImageDiv_);
     this.visible_ = !1;
-    
+
     this.map_.off('zoomend viewreset', this.draw, this);
-    
-  // };
   },
-// picasaInfoWindow$window.prototype.copy = function () {
   copy: function () {
-    picasa.log('picasaInfoWindow$window.copy');
     return new picasaInfoWindow$window(this.doc_, this.style_);
-  // };
   },
-// picasaInfoWindow$window.prototype.draw = function () {
   draw: function () {
-    picasa.log('picasaInfoWindow$window.draw');
-    if (this.visible_) {
-      //    var a = this.getProjection(),
-      ///    var a = L.Projection.LonLat(),
-      //      a = a.fromLatLngToDivPixel(this.markerPoint_);
-      ///      a = a.project(this.markerPoint_);
+    if (this.visible_ && this.map_) {
       var a = this.map_.latLngToLayerPoint(this.markerPoint_);
       this.setPosition(
         this.bottomImageDiv_,
@@ -164,29 +163,19 @@ var picasaInfoWindow$window = L.Layer.extend({
         -a.y + this.infoWindowOffset_.y + this.style_.bottomImageSize_.height - 1
       );
     }
-  // };
   },
-// picasaInfoWindow$window.prototype.openInfoWindowOnMarker = function (a, b) {
   openInfoWindowOnMarker: function (a, b) {
-    picasa.log('picasaInfoWindow$window.openInfoWindowOnMarker -  a: ' + a + ', b: ' + b);
-    //  var d = a.getIcon().anchor,
     var d = L.point(a.getIcon().options.iconAnchor),
-      //  c = new google.maps.Point(5, 1);
       c = L.point(5, 1);
     this.openInfoWindow(
-      //    a.getPosition(),
       a.getLatLng(),
       b,
-      //    new google.maps.Point(d.x - c.x, d.y - c.y)
       L.point(d.x - c.x, d.y - c.y)
     );
-  // };
   },
-// picasaInfoWindow$window.prototype.openInfoWindow = function (a, b, d) {
-    openInfoWindow: function (a, b, d) {
-    picasa.log('picasaInfoWindow$window.openInfoWindow -  a: ' + a + ', b: ' + b + ', d: ' + d);
+  openInfoWindow: function (a, b, d) {
+    picasa.log('picasaInfoWindow$window.openInfoWindow -  a: ' + a);
     this.infoWindowDiv_ &&
-      //    ((this.infoWindowOffset_ = d || new google.maps.Point(0, 0)),
       ((this.infoWindowOffset_ = d || L.point(0, 0)),
         (this.markerPoint_ = a),
         (a = []),
@@ -205,31 +194,20 @@ var picasaInfoWindow$window = L.Layer.extend({
         a.push(this.style_.bottomImageSize_.height.toString()),
         a.push('">'),
         (this.bottomImageDiv_.innerHTML = a.join('')),
-//         (this.infoWindowDiv_.style.zIndex = 100),
         this.setShow(!0),
         this.draw());
-  // };
   },
-// picasaInfoWindow$window.prototype.setShow = function (a) {
   setShow: function (a) {
-    picasa.log('picasaInfoWindow$window.setShow -  a: ' + a);
     this.visible_ = a;
     this.infoWindowDiv_ &&
       ((this.infoWindowDiv_.style.display = a ? '' : 'none'),
         (this.bottomImageDiv_.style.display = a ? '' : 'none'));
-  // };
   },
-// picasaInfoWindow$window.prototype.isHidden = function () {
   isHidden: function () {
-    picasa.log('picasaInfoWindow$window.isHidden');
     return !this.visible_;
-  // };
   },
-// picasaInfoWindow$window.prototype.setAutoPanning = function (a) {
   setAutoPanning: function (a) {
-    picasa.log('picasaInfoWindow$window.setAutoPanning -  a: ' + a);
     this.autoPanning_ = a;
-  // };
   }
 });
 window['picasaInfoWindow.remove'] = picasaInfoWindow$window.prototype.remove;
@@ -237,24 +215,14 @@ window['picasaInfoWindow.copy'] = picasaInfoWindow$window.prototype.copy;
 window['picasaInfoWindow.draw'] = picasaInfoWindow$window.prototype.draw;
 window['picasaInfoWindow.setShow'] = picasaInfoWindow$window.prototype.setShow;
 window['picasaInfoWindow.setAutoPanning'] = picasaInfoWindow$window.prototype.setAutoPanning;
-picasa = picasa || {};
-picasa.initLog =
-  picasa.initLog ||
-  function () {
-    picasa.log =
-      'undefined' !== typeof console && null !== console ?
-      function (a) {
-        window.console.log(a);
-      } :
-      function () {};
-  };
-//picasa.initLog();
+
 'undefined' === typeof Array.prototype.indexOf &&
   (Array.prototype.indexOf = function (a, b) {
     for (var d = b || 0, c = this.length; d < c; d++)
       if (this[d] === a) return d;
     return -1;
   });
+// Default texts (Picasa may override them with localized strings in initialize()).
 var tcSearchTip = 'Search for these photos in Picasa',
   tcEraseButton = 'Erase location info',
   tcEraseTip = 'Erase map coordinates(i.e., GPS information) from these photos',
@@ -268,10 +236,6 @@ var tcSearchTip = 'Search for these photos in Picasa',
   tcOk = 'OK',
   tcCancel = 'Cancel';
 picasa.maptypes = [
-  //  google.maps.MapTypeId.ROADMAP,
-  //  google.maps.MapTypeId.SATELLITE,
-  //  google.maps.MapTypeId.HYBRID,
-  //  google.maps.MapTypeId.TERRAIN,
   'OpenStreetMap',
   'Esri.WorldImagery',
 ];
@@ -279,6 +243,20 @@ function Size(width, height) {
   this.width = width;
   this.height = height;
 };
+
+// [geotag] Equivalent of google.maps.LatLng.toUrlValue(): "lat,lng" rounded to 6 decimals.
+picasa.toUrlValue = function (ll) {
+  ll = L.latLng(ll).wrap();
+  var r = function (x) {
+    return Math.round(x * 1e6) / 1e6;
+  };
+  return r(ll.lat) + ',' + r(ll.lng);
+};
+// [geotag] Adds a cache-busting parameter, except for data: URL thumbnails.
+picasa.thumbSrc_ = function (url) {
+  return 'data:' == url.substr(0, 5) ? url : url + '?' + new Date().getTime();
+};
+
 var picasa$geoPanelClass = function (a, b, d, c, e) {
   this.map_ = a;
   this.geocoder_ = e;
@@ -286,22 +264,21 @@ var picasa$geoPanelClass = function (a, b, d, c, e) {
     icon: d,
     draggable: !0
   };
-//  this.allMarkers_ = [];
   this.allMarkers_ = L.featureGroup();
   this.MarkerPicasaData_ = [];
   this.regularMarkerOptions_ = {
     icon: b,
     draggable: !0
   };
-  //  this.panSize_ = new google.maps.Size(0, 0);
   this.panSize_ = new Size(0, 0);
   this.infoWindow_ = c;
-  //  a = new google.maps.OverlayView();
   a = L.popup().setLatLng(L.latLng(0, 0));
   a.draw = function () {};
-  //  a.setMap(this.map_);
-///  a.addTo(this.map_);
   this.hiddenOverlay_ = a;
+  this.followMove_ = null;
+  this.followClick_ = null;
+  this.pendingMarker_ = null;  // [geotag] marker waiting for confirmation (OK/Cancel window open)
+  this.pendingMessage_ = '';
   this.infoWindow_ &&
     (this.infoWindow_.DetachFromMap(), this.infoWindow_.AttachToMap(this.map_));
 };
@@ -309,38 +286,24 @@ picasa$geoPanelClass.prototype.searchMarker_ = null;
 picasa$geoPanelClass.prototype.searchMarkerPicasaData_ = null;
 picasa$geoPanelClass.prototype.SetMarkerPicasaData = function (a, b) {
   if (this.searchMarker_ === a) return (this.searchMarkerPicasaData_ = b), !0;
-//  var d = this.allMarkers_.indexOf(a);
   var d = this.allMarkers_.hasLayer(a) ? this.allMarkers_.getLayerId(a) : -1;
   if (-1 === d)
     return (
-      picasa.log(
-        'SetMarkerPicasaData - Market not found in allMarkers_' +
-        //          a.getPosition()
-        a.getLatLng()
-      ),
+      picasa.log('SetMarkerPicasaData - Marker not found in allMarkers_ ' + a.getLatLng()),
       !1
     );
-  //  picasa.log('SetMarkerPicasaData - index:' + d + ',marker:' + a.getPosition());
-  picasa.log('SetMarkerPicasaData - index:' + d + ',marker:' + a.getLatLng());
   this.MarkerPicasaData_[d] = b;
   return !0;
 };
 picasa$geoPanelClass.prototype.GetMarkerPicasaData = function (a) {
+  if (null === a || undefined === a) return picasa.log('GetMarkerPicasaData(null)'), null;
   if (this.searchMarker_ === a) return this.searchMarkerPicasaData_;
-  if (null === a) return picasa.log('GetMarkerPicasaData(null)'), null;
-//  var b = this.allMarkers_.indexOf(a);
   var b = this.allMarkers_.hasLayer(a) ? this.allMarkers_.getLayerId(a) : -1;
   if (-1 === b)
     return (
-      picasa.log(
-        'GetMarkerPicasaData - Market not found in allMarkers_' +
-        //          a.getPosition()
-        a.getLatLng()
-      ),
+      picasa.log('GetMarkerPicasaData - Marker not found in allMarkers_ ' + a.getLatLng()),
       null
     );
-  //  picasa.log('GetMarkerPicasaData - index:' + b + ',marker:' + a.getPosition());
-  picasa.log('GetMarkerPicasaData - index:' + b + ',marker:' + a.getLatLng());
   return this.MarkerPicasaData_[b];
 };
 picasa$geoPanelClass.prototype.currBounds_ = null;
@@ -351,58 +314,45 @@ picasa.geoPanelData = null;
 var picasa$markerData = function (a, b, d, c, e) {
   this.checksum_ = a;
   this.index_ = b;
-  this.thumburl_ = d;
+  this.thumburl_ = d || '';
   this.original_latlng_ = c;
   this.num_photos_ = e;
 };
 picasa$markerData.prototype.MarkerMoved = function (a) {
   return null === this.original_latlng_ ? !0 : !this.original_latlng_.equals(a);
 };
+
 function picasa_initialize(a, b, d, c, e) {
-//   alert("a: " + a + "\n b:" + b + "\n d:" + d + "\n c:" + c + "\n e:" + e);
   picasa.initLog();
+  picasa.log('initialize');
   document.getElementById('errorDiv').innerHTML = b;
   document.getElementById('searchErrorDiv').innerHTML = d;
   document.getElementById('addMarker').setAttribute('alt', c);
+  document.getElementById('addMarker').setAttribute('title', c);
+  var h;
   try {
     try {
       eval(e);
     } catch (f) {}
-    //    var g = {
-    //        mapTypeId: google.maps.MapTypeId.ROADMAP,
-    //        center: new google.maps.LatLng(40.979898, -98.261719),
-    //        zoom: 4,
-    //        disableDefaultUI: !0,
-    //        mapTypeControl: !0,
-    //        mapTypeControlOptions: {
-    //          mapTypeIds: picasa.maptypes,
-    //          position: google.maps.ControlPosition.TOP_RIGHT,
-    //          style: google.maps.MapTypeControlStyle.DROPDOWN_MENU,
-    //        },
-    //        zoomControl: !0,
-    //        scaleControl: !0,
-    //        draggable: !0,
-    //      },
-    //      h = new google.maps.Map(document.getElementById('map_canvas'), g);
 
     // Windows7: if tiles won't load, try openstreetmap.de instead
     //   https://leaflet-extras.github.io/leaflet-providers/preview/
     var osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    	minZoom: 0,
+      minZoom: 0,
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap'
     });
     var sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-    	minZoom: 0,
-    	maxZoom: 19,
-    	attribution: '&copy; Powered by Esri'
+      minZoom: 0,
+      maxZoom: 19,
+      attribution: '&copy; Powered by Esri'
     });
     var topoMap = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
       maxZoom: 17,
       attribution: '&copy; OpenStreetMap'
     });
 
-    var h = L.map('map_canvas', { zoomControl:false, zoomAnimation:false, fadeAnimation:false, markerZoomAnimation:false, layers:[osm]}).setView([40.979898, -98.261719], 4);
+    h = L.map('map_canvas', { zoomControl:false, zoomAnimation:false, fadeAnimation:false, markerZoomAnimation:false, layers:[osm]}).setView(picasa.DEFAULT_CENTER, picasa.DEFAULT_ZOOM);
     var baseMaps = {
       "OpenStreetMap": osm,
       "OpenTopoMap": topoMap,
@@ -413,50 +363,26 @@ function picasa_initialize(a, b, d, c, e) {
     L.control.zoom().addTo(h);
     L.control.scale().addTo(h);
 
-    //    b = {};
-    //    d = {};
-    //    b.v3 = {};
-    //    d.v3 = {};
-    //    c = [];
-    //    c.push('file://');
-    //    c.push(a);
-    //    c.push('mm_20_red.png');
-    //    b.image = c.join('');
-    //    c = [];
-    //    c.push('file://');
-    //    c.push(a);
-    //    c.push('mm_20_shadow.png');
-    //    b.shadow = c.join('');
-    //    d.shadow = c.join('');
-    //    b.iconSize = new google.maps.Size(12, 20);
-    ///    b.iconSize = [12, 20];
-    //    b.shadowSize = new google.maps.Size(22, 20);
-    ///    b.shadowSize = [22, 20];
-    //    b.iconAnchor = new google.maps.Point(6, 20);
-    ///    b.iconAnchor = L.point(6, 20);
-    //    b.infoWindowAnchor = new google.maps.Point(5, 1);
-    //    b.infoWindowAnchor = L.point(5, 1);
-    //    b.v3.size = b.iconSize;
-    //    b.v3.anchor = b.iconAnchor;
-    //    b.v3.url = b.image;
-    //    b.v3.shadow = { size: b.shadowSize, url: d.shadow };
-    //    c = [];
-    //    c.push('file://');
-    //    c.push(a);
-    //    c.push('mm_20_green.png');
-    //    d.image = c.join('');
-    //    d.iconSize = new google.maps.Size(12, 20);
-    ///    d.iconSize = [12, 20];
-    //    d.shadowSize = new google.maps.Size(22, 20);
-    ///    d.shadowSize = [22, 20];
-    //    d.iconAnchor = new google.maps.Point(6, 20);
-    ///    d.iconAnchor = L.point(6, 20);
-    //    d.infoWindowAnchor = new google.maps.Point(5, 1);
-    //    d.infoWindowAnchor = L.point(5, 1);
-    //     d.v3.size = d.iconSize;
-    //     d.v3.anchor = d.iconAnchor;
-    //     d.v3.url = d.image;
-    //     d.v3.shadow = { size: d.shadowSize, url: d.shadow };
+    // [geotag] The "add a place" button becomes a Leaflet control below the zoom buttons
+    //          (the Leaflet port detached it from the page, so it was invisible).
+    var AddMarkerControl = L.Control.extend({
+      options: { position: 'topleft' },
+      onAdd: function () {
+        var box = L.DomUtil.create('div', 'leaflet-bar picasa-addmarker');
+        var k = document.getElementById('addMarkerDiv');
+        k.style.position = 'static';
+        k.style.display = 'block';
+        box.appendChild(k);
+        L.DomEvent.disableClickPropagation(box);
+        return box;
+      }
+    });
+    new AddMarkerControl().addTo(h);
+    // [geotag] Click on the map: moves the marker that is waiting for confirmation.
+    h.on('click', function (ev) {
+      picasa.handleMapClick_(ev);
+    });
+
     b = L.icon({
       iconUrl: 'mm_20_red.png',
       iconSize: [12, 20],
@@ -475,7 +401,6 @@ function picasa_initialize(a, b, d, c, e) {
     });
     var k = new picasaInfoWindow$style(
         'bottom_image.gif',
-        //        new google.maps.Size(24, 24),
         new Size(24, 24),
         'info_window_bottom_image',
         -50
@@ -486,530 +411,449 @@ function picasa_initialize(a, b, d, c, e) {
       b,
       d,
       m,
-      //new google.maps.Geocoder()
-      null
+      null // the Google geocoder is replaced by Nominatim (see picasa.search)
     );
     picasa.scriptQueue.scheduleQueueProcessing();
   } catch (l) {
-    return (
-      picasa.log('Error: ' + l),
-//       (document.getElementById('errorDiv').style.display = 'block'),
-//      (document.getElementById('errorDiv').innerText = l),
-//       (document.getElementById('errorDiv').innerText = l.stack),
-//       (document.getElementById('addMarkerDiv').style.display = 'none'),
-      !1
-    );
+    return showError(l);
   }
   document.getElementById('errorDiv').style.display = 'none';
   document.getElementById('addMarkerDiv').style.display = 'block';
-  a = document.createElement('div');
-  k = document.getElementById('addMarkerDiv');
-  a.appendChild(k);
-  a.index = 0;
-  //   h.controls[google.maps.ControlPosition.TOP_LEFT].push(a);
-  //   google.maps.event.addDomListener(h, 'click', function (a) {
-  //     picasa.log(a.latLng);
-  //   });
   return !0;
 }
+
+// [geotag] Sends a marker's info to Picasa through the hidden div.
+picasa.notifyMarker_ = function (marker, data) {
+  var b = document.getElementById('hiddenDiv');
+  b &&
+    (b.setAttribute('checksum', data.checksum_.toString()),
+      b.setAttribute('latlng', picasa.toUrlValue(marker.getLatLng())),
+      b.setAttribute('markindex', data.index_.toString()),
+      picasa.notifyPicasa('hiddenDiv'));
+};
 picasa.handleClick = function () {
   var a = picasa.geoPanelData.GetMarkerPicasaData(this);
+  picasa.log('handleClick - data: ' + (a ? a.checksum_ : 'null'));
   if (a)
     if (0 < a.thumburl_.length)
       picasa.openMarkerInfoWindow(this, '', 'Place photos to this new mark');
-    else {
-      var b = document.getElementById('hiddenDiv');
-      b.setAttribute('checksum', a.checksum_.toString());
-      //      b.setAttribute('latlng', this.getPosition().toUrlValue());
-      b.setAttribute('latlng', this.getLatLng().toString());
-      b.setAttribute('markindex', a.index_.toString());
-      picasa.notifyPicasa('hiddenDiv');
-    }
+    else
+      picasa.notifyMarker_(this, a);
 };
 picasa.handleDragStart = function () {
+  picasa.log('handleDragStart');
   picasa.geoPanelData.infoWindow_.setShow(!1);
-  //  this.setIcon(picasa.geoPanelData.searchMarkerOptions_.icon.v3);
-  picasa.geoPanelData.GetMarkerPicasaData(this);
+  // [geotag] green marker while dragging (as in the Google version)
+  this.setIcon(picasa.geoPanelData.searchMarkerOptions_.icon);
 };
 picasa.handleDragEnd = function () {
   var a = picasa.geoPanelData.GetMarkerPicasaData(this);
+  picasa.log('handleDragEnd - ' + picasa.toUrlValue(this.getLatLng()));
   if (a)
     if (0 < a.thumburl_.length)
       picasa.openMarkerInfoWindow(this, '', 'Place photos to this new mark');
-    else {
-      var b = document.getElementById('hiddenDiv');
-      b &&
-        (b.setAttribute('checksum', a.checksum_.toString()),
-          //        b.setAttribute('latlng', this.getPosition().toUrlValue()),
-          b.setAttribute('latlng', this.getLatLng().toString()),
-          b.setAttribute('markindex', a.index_.toString()),
-          picasa.notifyPicasa('hiddenDiv'));
-    }
+    else
+      picasa.notifyMarker_(this, a);
+};
+// [geotag] Until OK is clicked, a click on the map moves the pending marker
+//          (new place or dragged existing marker) and refreshes the info window.
+picasa.handleMapClick_ = function (ev) {
+  var g = picasa.geoPanelData;
+  if (!g || g.followMove_) return; // the "follow the mouse" mode already handles this click
+  var mk = g.pendingMarker_;
+  if (!mk || !g.map_.hasLayer(mk)) return;
+  picasa.log('map click: marker moved to ' + picasa.toUrlValue(ev.latlng));
+  mk.setLatLng(ev.latlng);
+  picasa.openMarkerInfoWindow(mk, '', g.pendingMessage_);
+};
+// [geotag] Called when OK is clicked: the marker is no longer pending.
+picasa.confirmed_ = function () {
+  picasa.log('OK clicked');
+  picasa.geoPanelData && (picasa.geoPanelData.pendingMarker_ = null);
 };
 picasa.cancelMarker = function (a) {
-  picasa.geoPanelData.infoWindow_.setShow(!1);
-  if (
-    picasa.geoPanelData.map_ &&
-//     -1 != a &&
-//     a < picasa.geoPanelData.allMarkers_.length
-    picasa.geoPanelData.allMarkers_.hasLayer(a)
-  ) {
-//    a = picasa.geoPanelData.allMarkers_[a];
-    a = picasa.geoPanelData.allMarkers_.getLayer(a);
-    var b = picasa.geoPanelData.GetMarkerPicasaData(a);
+  picasa.log('cancelMarker - ' + a);
+  var g = picasa.geoPanelData;
+  g.infoWindow_.setShow(!1);
+  g.pendingMarker_ = null;
+  a = Number(a);
+  // [geotag] Cancel on a new place: remove the green marker.
+  if (-1 === a) {
+    picasa.removeSearchMarker();
+    return;
+  }
+  if (g.map_ && g.allMarkers_.hasLayer(a)) {
+    var mk = g.allMarkers_.getLayer(a);
+    var b = g.GetMarkerPicasaData(mk);
     null !== b &&
-      //      b.MarkerMoved(a.getPosition()) &&
-      b.MarkerMoved(a.getLatLng()) &&
-      //      (a.setIcon(picasa.geoPanelData.regularMarkerOptions_.icon.v3),
-      (a.setIcon(picasa.geoPanelData.regularMarkerOptions_.icon),
-        a.setPosition(b.original_latlng_),
-        picasa.geoPanelData.map_.panTo(b.original_latlng_));
+      (mk.setIcon(g.regularMarkerOptions_.icon),
+        b.MarkerMoved(mk.getLatLng()) &&
+        (mk.setLatLng(b.original_latlng_), g.map_.panTo(b.original_latlng_)));
   }
 };
-picasa.openMarkerInfoWindow = function (a, b, d) {
-  picasa.log('openMarkerInfoWindow -  a: ' + a + ', b: ' + b + ', d: ' + d);
-  b = picasa.geoPanelData.GetMarkerPicasaData(a);
-  if (null !== a && null !== b && 0 != b.thumburl_.length) {
-    var c = '';
-    if (
-      a == picasa.geoPanelData.searchMarker_ ||
-//       b.MarkerMoved(a.getPosition())
-      b.MarkerMoved(a.getLatLng())
-    ) {
-      b = a;
-      c = d;
-      d = [];
-//       var e = b.getPosition();
-      var e = b.getLatLng();
-      b = picasa.geoPanelData.GetMarkerPicasaData(b);
-      null != e &&
-        c.length &&
-        (d.push('"geotag:'),
-          d.push(b.checksum_.toString()),
-          d.push(','),
-          d.push(e.toUrlValue()),
-          d.push('"'));
-      e = -1 != b.checksum_ ? '"showphotos:' + b.checksum_ + '"' : '';
-      c = [];
-      c.push('<table border="0" cellpadding="1" cellspacing="2" width="180">');
-      var f = '',
-        f = -1 != b.index_ ?
-        1 < b.num_photos_ ?
-        tcMovePhotos :
-        tcMovePhoto :
-        1 < b.num_photos_ ?
-        tcPutPhotos :
-        tcPutPhoto;
-      1 < b.num_photos_ && (f = f.replace('%d', b.num_photos_.toString()));
-      c.push(
-        '<tr><td colspan="3" width="100%" class="info_window_title" nowrap>'
-      );
-      c.push(f);
-      c.push('</td></tr>');
-      e.length ?
-        (c.push(
-            '<tr><td colspan="3"><div class="info_window_thumb"><a href='
-          ),
-          c.push(e),
-          c.push(' title="'),
-          c.push(tcSearchTip),
-          c.push('"><img src="'),
-          c.push(b.thumburl_),
-          c.push('?'),
-          c.push(new Date().getTime()),
-          c.push('"></a></div></td></tr>')) :
-        (c.push(
-            '<tr><td colspan="3"><div class="info_window_thumb"><img src="'
-          ),
-          c.push(b.thumburl_),
-          c.push('?'),
-          c.push(new Date().getTime()),
-          c.push('"></div></td></tr>'));
-      e = [];
-      f = [];
-      d.length &&
-        (e.push('<td width="40%"><a href='),
-          e.push(d.join('')),
-          e.push('><div class="info_window_footer_button">'),
-          e.push(tcOk),
-          e.push('</div></a></td>'));
-      f.push('<td width="40%">');
-      f.push('<a href="javascript:picasa.cancelMarker(');
-      f.push(b.index_.toString());
-      f.push(');">');
-      f.push('<div class="info_window_footer_button">');
-      f.push(tcCancel);
-      f.push('</div></a></td>');
-      c.push(e.join(''));
-      c.push(f.join(''));
-      c.push('</tr></table>');
-      d = c.join('');
-    } else
-      (c = picasa.geoPanelData.GetMarkerPicasaData(a)) ?
-      ((d = -1 != c.checksum_ ? '"cleargeotag:' + c.checksum_ + '"' : ''),
-        (e = -1 != c.checksum_ ? '"showphotos:' + c.checksum_ + '"' : ''),
-        (b = []),
-        b.push(
-          '<table border="0" cellpadding="1" cellspacing="2" width="180">'
-        ),
-        (f = []),
-        1 < c.num_photos_ ?
-        f.push(tcPhotosHere.replace('%d', c.num_photos_.toString())) :
-        f.push(tcPhotoHere),
-        b.push(
-          '<tr><td colspan="3" width="100%" class="info_window_title" nowrap>'
-        ),
-        b.push(
-          '<a href="javascript:picasa.geoPanelData.infoWindow_.setShow(false)">'
-        ),
-        b.push('<img width="14" height="13" title="'),
-        b.push(tcCloseTip),
-        b.push('" src="close.gif" class="info_window_close"></a>'),
-        b.push(f.join('')),
-        b.push('</td></tr>'),
-        b.push('<tr><td colspan="3"><div class="info_window_thumb"><a href='),
-        b.push(e),
-        b.push(' title="'),
-        b.push(tcSearchTip),
-        b.push('"><img src="'),
-        b.push(c.thumburl_),
-        'data:' != c.thumburl_.substr(0, 5) &&
-        (b.push('?'), b.push(new Date().getTime())),
-        b.push('"></a></div></td></tr>'),
-//         b.push('<tr>'),
-//         (c = []),
-//         d.length &&
-//         (c.push('<td><a href='),
-//           c.push(d),
-//           c.push('title="'),
-//           c.push(tcEraseTip),
-//           c.push('"><div width="60%" class="info_window_footer_button">'),
-//           c.push(tcEraseButton),
-//           c.push('</div></a></td>')),
-//         b.push('<td width="20%"></td>'),
-//         c.length && b.push(c.join('')),
-//         b.push('<td width="20%"></td>'),
-//         b.push('</tr></table>'),
-        b.push('</table>'),
-        (d = b.join(''))) :
-      (d = '');
-    c = d;
-    picasa.geoPanelData.infoWindow_.openInfoWindowOnMarker(a, c);
+
+// [geotag] Rewritten for readability. Two cases:
+//   - new place or moved marker -> "Put/Move photo here?" + OK (geotag: link) / Cancel
+//   - existing marker           -> thumbnail + "Erase location info" button (cleargeotag: link)
+picasa.openMarkerInfoWindow = function (marker, address, message) {
+  var g = picasa.geoPanelData;
+  var data = g.GetMarkerPicasaData(marker);
+  picasa.log('openMarkerInfoWindow - message: ' + message + ', data: ' + (data ? data.checksum_ : 'null'));
+  if (null === marker || null === data || !data.thumburl_ || 0 == data.thumburl_.length) return;
+  var html = [];
+  var thumb = picasa.thumbSrc_(data.thumburl_);
+  var showLink = -1 != data.checksum_ ? '"showphotos:' + data.checksum_ + '"' : '';
+  var thumbHtml = showLink ?
+    '<a href=' + showLink + ' title="' + tcSearchTip + '"><img src="' + thumb + '"></a>' :
+    '<img src="' + thumb + '">';
+  var pos = marker.getLatLng();
+
+  if (marker === g.searchMarker_ || data.MarkerMoved(pos)) {
+    g.pendingMarker_ = marker;
+    g.pendingMessage_ = message || 'Place photos to this new mark';
+    var title = -1 != data.index_ ?
+      (1 < data.num_photos_ ? tcMovePhotos : tcMovePhoto) :
+      (1 < data.num_photos_ ? tcPutPhotos : tcPutPhoto);
+    1 < data.num_photos_ && (title = title.replace('%d', data.num_photos_.toString()));
+    // Picasa intercepts this link to write the coordinates into the photos.
+    var geotagLink = '"geotag:' + data.checksum_ + ',' + picasa.toUrlValue(pos) + '"';
+    picasa.log('OK link: ' + geotagLink);
+    html.push('<table border="0" cellpadding="1" cellspacing="2" width="180">');
+    html.push('<tr><td colspan="2" width="100%" class="info_window_title" nowrap>' + title + '</td></tr>');
+    html.push('<tr><td colspan="2"><div class="info_window_thumb">' + thumbHtml + '</div></td></tr>');
+    html.push('<tr>');
+    html.push('<td width="50%"><a href=' + geotagLink + ' onclick="picasa.confirmed_()"><div class="info_window_footer_button">' + tcOk + '</div></a></td>');
+    html.push('<td width="50%"><a href="javascript:picasa.cancelMarker(' + data.index_ + ');"><div class="info_window_footer_button">' + tcCancel + '</div></a></td>');
+    html.push('</tr></table>');
+  } else {
+    g.pendingMarker_ === marker && (g.pendingMarker_ = null);
+    var here = 1 < data.num_photos_ ?
+      tcPhotosHere.replace('%d', data.num_photos_.toString()) :
+      tcPhotoHere;
+    html.push('<table border="0" cellpadding="1" cellspacing="2" width="180">');
+    html.push('<tr><td colspan="3" width="100%" class="info_window_title" nowrap>');
+    html.push('<a href="javascript:picasa.geoPanelData.infoWindow_.setShow(false)">');
+    html.push('<img width="14" height="13" title="' + tcCloseTip + '" src="close.gif" class="info_window_close"></a>');
+    html.push(here + '</td></tr>');
+    html.push('<tr><td colspan="3"><div class="info_window_thumb">' + thumbHtml + '</div></td></tr>');
+    if (-1 != data.checksum_) {
+      // [geotag] "Erase location info" button re-enabled
+      html.push('<tr><td width="10%"></td><td width="80%">');
+      html.push('<a href="cleargeotag:' + data.checksum_ + '" title="' + tcEraseTip + '">');
+      html.push('<div class="info_window_footer_button">' + tcEraseButton + '</div></a>');
+      html.push('</td><td width="10%"></td></tr>');
+    }
+    html.push('</table>');
   }
+  g.infoWindow_.openInfoWindowOnMarker(marker, html.join(''));
+  // [geotag] Pans the map if the info window is out of view.
+  try {
+    g.infoWindow_.autoPanning_ && g.map_.panInside &&
+      g.map_.panInside(pos, { paddingTopLeft: [140, 230], paddingBottomRight: [60, 20], animate: false });
+  } catch (e) {}
 };
 picasa.removeMarkersFromMap = function (a) {
-//   for (var b = 0; b < a.length; b++) a[b].setMap(null);
-///   for (var b = 0; b < a.length; b++) picasa.geoPanelData.map_.removeLayer(a[b]);
   a.clearLayers();
+  // [geotag] also removes the old, empty group from the map
+  picasa.geoPanelData.map_ && picasa.geoPanelData.map_.hasLayer(a) && picasa.geoPanelData.map_.removeLayer(a);
 };
 picasa.beginAddingMarkers = function () {
-try {
-  picasa.geoPanelData.map_ &&
-    (picasa.removeMarkersFromMap(picasa.geoPanelData.allMarkers_),
-      picasa.removeSearchMarker(),
-//      (picasa.geoPanelData.allMarkers_ = []),
-      (picasa.geoPanelData.allMarkers_ = L.featureGroup()),
-      (picasa.geoPanelData.searchMarker_ = null),
-      (picasa.geoPanelData.MarkerPicasaData_ = []),
-      picasa.geoPanelData.infoWindow_ &&
-      (picasa.geoPanelData.infoWindow_.DetachFromMap(),
-        picasa.geoPanelData.infoWindow_.AttachToMap(picasa.geoPanelData.map_)),
-      null === picasa.geoPanelData.currBounds_ &&
-      //      (picasa.geoPanelData.currBounds_ = new google.maps.LatLngBounds()));
-      (picasa.geoPanelData.currBounds_ = L.latLngBounds()));
+  picasa.log('beginAddingMarkers');
+  try {
+    picasa.geoPanelData.map_ &&
+      (picasa.removeMarkersFromMap(picasa.geoPanelData.allMarkers_),
+        picasa.removeSearchMarker(),
+        (picasa.geoPanelData.pendingMarker_ = null),
+        (picasa.geoPanelData.allMarkers_ = L.featureGroup()),
+        (picasa.geoPanelData.searchMarker_ = null),
+        (picasa.geoPanelData.MarkerPicasaData_ = []),
+        picasa.geoPanelData.infoWindow_ &&
+        (picasa.geoPanelData.infoWindow_.DetachFromMap(),
+          picasa.geoPanelData.infoWindow_.AttachToMap(picasa.geoPanelData.map_)),
+        null === picasa.geoPanelData.currBounds_ &&
+        (picasa.geoPanelData.currBounds_ = L.latLngBounds()));
   } catch (l) { return showError(l); }
 };
 picasa.addMarker = function (a, b, d, c) {
-picasa.log('picasaInfoWindow$window.openInfoWindow -  a: ' + a + ', b: ' + b + ', d: ' + d + ', c: ' + c);
-try {
-  if (picasa.geoPanelData.map_) {
-    //     var e = new google.maps.LatLng(a, b);
-    var e = L.latLng(a, b);
-    picasa.geoPanelData.currBounds_.extend(e);
-    b = {
-      //      map: picasa.geoPanelData.map_,
-      //       position: e,
-//      draggable: !0,
-//      draggable: !1,
-      //      raiseOnDrag: !0,
-      //      icon: picasa.geoPanelData.regularMarkerOptions_.icon.v3,
-      icon: picasa.geoPanelData.regularMarkerOptions_.icon,
-      //      shadow: picasa.geoPanelData.regularMarkerOptions_.icon.v3.shadow,
-    };
-//    a = picasa.geoPanelData.allMarkers_.length;
-//    d = new picasa$markerData(d, a, '', e, c);
-    //    c = new google.maps.Marker(b);
-    m = L.marker(e, b);
-    picasa.geoPanelData.allMarkers_.addLayer(m);
-    a = picasa.geoPanelData.allMarkers_.getLayerId(m);
-    d = new picasa$markerData(d, a, '', e, c);
-    c = m;
-    picasa.geoPanelData.SetMarkerPicasaData(c, d);
-    //     google.maps.event.addListener(c, 'click', picasa.handleClick);
-    c.addEventListener('click', picasa.handleClick);
-    //     google.maps.event.addListener(c, 'dragstart', picasa.handleDragStart);
-///    c.addEventListener(c, 'dragstart', picasa.handleDragStart);
-    //     google.maps.event.addListener(c, 'dragend', picasa.handleDragEnd);
-///    c.addEventListener(c, 'dragend', picasa.handleDragEnd);
-  }
+  picasa.log('addMarker - lat: ' + a + ', lng: ' + b + ', checksum: ' + d + ', nb: ' + c);
+  try {
+    if (picasa.geoPanelData.map_) {
+      var e = L.latLng(a, b);
+      null === picasa.geoPanelData.currBounds_ && (picasa.geoPanelData.currBounds_ = L.latLngBounds());
+      picasa.geoPanelData.currBounds_.extend(e);
+      var opts = {
+        icon: picasa.geoPanelData.regularMarkerOptions_.icon,
+        draggable: !0 // [geotag] markers can be dragged again
+      };
+      var mk = L.marker(e, opts);
+      picasa.geoPanelData.allMarkers_.addLayer(mk);
+      var id = picasa.geoPanelData.allMarkers_.getLayerId(mk);
+      picasa.geoPanelData.SetMarkerPicasaData(mk, new picasa$markerData(d, id, '', e, c));
+      mk.on('click', picasa.handleClick);
+      mk.on('dragstart', picasa.handleDragStart); // [geotag]
+      mk.on('dragend', picasa.handleDragEnd);     // [geotag]
+    }
   } catch (l) { return showError(l); }
 };
 picasa.endAddingMarkers = function (a) {
-picasa.log('endAddingMarkers -  a: ' + a);
-try {
-//   var b = picasa.geoPanelData.allMarkers_.length;
-  var b = picasa.geoPanelData.allMarkers_.getLayers().length;
-//   if (b) {
-//     var d = picasa.geoPanelData.map_.getZoom();
-//     picasa.geoPanelData.map_.fitBounds(picasa.geoPanelData.currBounds_);
-//     var c = picasa.geoPanelData.map_.getZoom();
-//     0 > c && (c = 0);
-//     15 < c && (c = 15);
-//     picasa.geoPanelData.map_.setZoom(a ? c : d);
-//     a = picasa.geoPanelData.currBounds_.getCenter();
-//     1 == b
-//       ? picasa.geoPanelData.map_.panTo(a)
-//       : picasa.geoPanelData.map_.setCenter(a);
-  if (b > 0) {
-//     picasa.geoPanelData.allMarkers_.addTo(picasa.geoPanelData.map_);
-//     var d = picasa.geoPanelData.map_.getZoom();
-//     if (picasa.geoPanelData.currBounds_.getNorthWest() == picasa.geoPanelData.currBounds_.getSouthEast()) {
-//       picasa.geoPanelData.currBounds_ = picasa.geoPanelData.currBounds_.getNorthWest().toBounds(200);
-//     }
-//     picasa.geoPanelData.map_.fitBounds(picasa.geoPanelData.currBounds_);
-//     var c = picasa.geoPanelData.map_.getZoom();
-//     0 > c && (c = 0);
-//     15 < c && (c = 15);
-//     picasa.geoPanelData.map_.setZoom(a ? c : d);
-//     a = picasa.geoPanelData.currBounds_.getCenter();
-//     picasa.geoPanelData.map_.panTo(a);
-
-    picasa.geoPanelData.map_.fitBounds(picasa.geoPanelData.currBounds_, 
-      { maxZoom: 15, padding:	[10, 10] });
-    picasa.geoPanelData.allMarkers_.addTo(picasa.geoPanelData.map_);
-
-  }
-  picasa.geoPanelData.currBounds_ = null;
+  picasa.log('endAddingMarkers -  a: ' + a);
+  try {
+    var b = picasa.geoPanelData.allMarkers_.getLayers().length;
+    if (b > 0) {
+      picasa.geoPanelData.map_.fitBounds(picasa.geoPanelData.currBounds_,
+        { maxZoom: 15, padding: [10, 10] });
+      picasa.geoPanelData.allMarkers_.addTo(picasa.geoPanelData.map_);
+    }
+    picasa.geoPanelData.currBounds_ = null;
   } catch (l) { return showError(l); }
 };
 picasa.updateMarker = function (a, b) {
-  picasa.log('updateMarker -  a: ' + a + ', b: ' + b);
-//   if (picasa.geoPanelData.map_ && a < picasa.geoPanelData.allMarkers_.length) {
+  picasa.log('updateMarker -  a: ' + a + ', b: ' + (b ? String(b).substr(0, 60) : b));
   a = Number(a);
   if (picasa.geoPanelData.map_ && picasa.geoPanelData.allMarkers_.hasLayer(a)) {
-//    var d = picasa.geoPanelData.allMarkers_[a];
     var d = picasa.geoPanelData.allMarkers_.getLayer(a);
-    picasa.geoPanelData.GetMarkerPicasaData(d).thumburl_ = b;
+    picasa.geoPanelData.GetMarkerPicasaData(d).thumburl_ = b || '';
     picasa.openMarkerInfoWindow(d, '', 'Place photos to this new mark');
   }
 };
 picasa.handlePanning = function () {
   picasa.geoPanelData.panning_ &&
     null !== picasa.geoPanelData.map_ &&
+    // [geotag] Leaflet expects a point, not two numbers
     picasa.geoPanelData.map_.panBy(
-      -picasa.geoPanelData.panSize_.width,
-      -picasa.geoPanelData.panSize_.height
+      [-picasa.geoPanelData.panSize_.width, -picasa.geoPanelData.panSize_.height],
+      { animate: false }
     );
+};
+
+// [geotag] "Follow the mouse" mode after clicking the add-a-place button.
+picasa.stopFollowing_ = function () {
+  var g = picasa.geoPanelData;
+  if (!g || !g.map_) return;
+  g.followMove_ && (g.map_.off('mousemove', g.followMove_), (g.followMove_ = null));
+  g.followClick_ && (g.map_.off('click', g.followClick_), (g.followClick_ = null));
+  g.panning_ = !1;
+  g.panSize_ = new Size(0, 0);
+};
+picasa.setMarkerClickThrough_ = function (mk, through) {
+  var el = mk && mk.getElement ? mk.getElement() : null;
+  el && (el.style.pointerEvents = through ? 'none' : '');
 };
 picasa.newPlaceMarker = function (a, b) {
-  if (picasa.geoPanelData.map_) {
-    var d = document.getElementById('addMarkerDiv'),
-      c = d.offsetLeft + d.offsetParent.offsetLeft + 1.5 * d.offsetWidth,
-      d = d.offsetTop + d.offsetParent.offsetTop + d.offsetHeight,
-      c = picasa.fromContainerPixelToLatLng(c, d);
-    picasa.geoPanelData.searchMarker_ = picasa.createSearchMarker(c, b, a, '');
-    if (null !== picasa.geoPanelData.searchMarker_) {
-      picasa.geoPanelData.panning_ = !1;
-      //      picasa.geoPanelData.panSize_ = new google.maps.Size(0, 0);
-      picasa.geoPanelData.panSize_ = new Size(0, 0);
-      var e = null;
-        //         e = google.maps.event.addListener(
-        //           picasa.geoPanelData.map_,
-        picasa.geoPanelData.map_.addEventListener(
-          'mousemove',
-          function (a) {
-            if (picasa.geoPanelData.searchMarker_) {
-              var b = a.latLng;
-              picasa.geoPanelData.searchMarker_.setPosition(b);
-              a = picasa.geoPanelData.map_.getDiv().offsetWidth;
-              var c = picasa.geoPanelData.map_.getDiv().offsetHeight,
-                d = 0,
-                e = 0;
-              89 < b.lat() ||
-                -89 > b.lat() ||
-                ((b = picasa.fromLatLngToContainerPixel(b)),
-                  (d = 10 > b.x ? 2 : 10 > a - b.x ? -2 : 0),
-                  (e = 10 > b.y ? 2 : 10 > c - b.y ? -2 : 0),
-                  0 != d || 0 != e ? //                  ? ((picasa.geoPanelData.panSize_ = new google.maps.Size(
-                  ((picasa.geoPanelData.panSize_ = new Size(d, e)),
-                    (picasa.geoPanelData.panning_ = !0),
-                    picasa.handlePanning()) :
-                  (picasa.geoPanelData.panning_ = !1));
-            }
-          }
-        );
-      //       google.maps.event.addListener(
-      //         picasa.geoPanelData.map_,
-      picasa.geoPanelData.map_.addEventListener(
-        'click',
-        function () {
-          //           google.maps.event.clearListeners(picasa.geoPanelData.map_, 'moveend');
-          //           e &&
-          //             (google.maps.event.removeListener(e),
-          //             (e = null),
-          //             picasa.geoPanelData.searchMarker_ &&
-          //               picasa.openMarkerInfoWindow(
-          //                 picasa.geoPanelData.searchMarker_,
-          //                 '',
-          //                 a
-          //               ));
-        }
-      );
+  // a = message text, b = thumbnail URL (both provided by Picasa)
+  picasa.log('newPlaceMarker - a: ' + a + ', b: ' + (b ? String(b).substr(0, 60) : b));
+  var g = picasa.geoPanelData;
+  if (!g || !g.map_) return;
+  try {
+    picasa.stopFollowing_();
+    var map = g.map_,
+      cont = map.getContainer(),
+      x = cont.clientWidth / 2,
+      y = cont.clientHeight / 2,
+      btn = document.getElementById('addMarkerDiv');
+    if (btn && btn.getBoundingClientRect) {
+      var r = btn.getBoundingClientRect(),
+        mr = cont.getBoundingClientRect();
+      x = r.left - mr.left + 1.5 * r.width;
+      y = r.top - mr.top + r.height;
     }
-  }
+    var mk = picasa.createSearchMarker(picasa.fromContainerPixelToLatLng(x, y), b, a, '');
+    if (!mk) return;
+    // The marker follows the mouse: it must not catch clicks meanwhile.
+    picasa.setMarkerClickThrough_(mk, !0);
+    g.followMove_ = function (ev) {
+      if (g.searchMarker_ !== mk) return picasa.stopFollowing_();
+      var ll = ev.latlng;
+      mk.setLatLng(ll);
+      var w = cont.offsetWidth,
+        h = cont.offsetHeight,
+        p = ev.containerPoint,
+        dx = 0,
+        dy = 0;
+      if (89 > ll.lat && -89 < ll.lat) {
+        dx = 10 > p.x ? 2 : 10 > w - p.x ? -2 : 0;
+        dy = 10 > p.y ? 2 : 10 > h - p.y ? -2 : 0;
+      }
+      0 != dx || 0 != dy ?
+        ((g.panSize_ = new Size(dx, dy)), (g.panning_ = !0), picasa.handlePanning()) :
+        (g.panning_ = !1);
+    };
+    g.followClick_ = function (ev) {
+      if (g.searchMarker_ !== mk) return picasa.stopFollowing_();
+      picasa.log('newPlaceMarker - map click: ' + picasa.toUrlValue(ev.latlng));
+      picasa.stopFollowing_();
+      mk.setLatLng(ev.latlng);
+      picasa.setMarkerClickThrough_(mk, !1);
+      picasa.openMarkerInfoWindow(mk, '', a);
+    };
+    map.on('mousemove', g.followMove_);
+    map.on('click', g.followClick_);
+  } catch (l) { return showError(l); }
 };
 picasa.removeSearchMarker = function () {
-  picasa.geoPanelData.searchMarker_ &&
-    (picasa.geoPanelData.searchMarker_.setMap(null),
-      (picasa.geoPanelData.searchMarker_ = null),
-      picasa.geoPanelData.infoWindow_ &&
-      (picasa.geoPanelData.infoWindow_.DetachFromMap(),
-        picasa.geoPanelData.infoWindow_.AttachToMap(picasa.geoPanelData.map_)));
+  var g = picasa.geoPanelData;
+  if (!g) return;
+  picasa.stopFollowing_();
+  g.searchMarker_ &&
+    (g.map_ && g.map_.removeLayer(g.searchMarker_), // [geotag] setMap(null) does not exist in Leaflet
+      g.pendingMarker_ === g.searchMarker_ && (g.pendingMarker_ = null),
+      (g.searchMarker_ = null),
+      (g.searchMarkerPicasaData_ = null),
+      g.infoWindow_ &&
+      (g.infoWindow_.DetachFromMap(), g.infoWindow_.AttachToMap(g.map_)));
 };
 picasa.createSearchMarker = function (a, b, d, c) {
-  if (picasa.geoPanelData.map_) {
-    picasa.removeSearchMarker();
-    var e = {
-      //       position: a,
-      //       map: picasa.geoPanelData.map_,
-      draggable: !0,
-      //      icon: picasa.geoPanelData.searchMarkerOptions_.icon.v3,
-      icon: picasa.geoPanelData.searchMarkerOptions_.icon,
-    };
-    //     picasa.geoPanelData.searchMarker_ = new google.maps.Marker(e);
-    x = picasa.geoPanelData.map_.containerPointToLatLng(a); 
-    picasa.geoPanelData.searchMarker_ = L.marker(x, e).addTo(picasa.geoPanelData.map_);
-    a = new picasa$markerData(
-      -1,
-      -1,
-      b,
-      a,
-      picasa.geoPanelData.currNumSelected_
-    );
-    picasa.geoPanelData.SetMarkerPicasaData(
-      picasa.geoPanelData.searchMarker_,
-      a
-    );
-    //     google.maps.   .addListener(
-    //       picasa.geoPanelData.searchMarker_,
-    picasa.geoPanelData.searchMarker_.addEventListener(
-      'click',
-      function () {
-        picasa.openMarkerInfoWindow(picasa.geoPanelData.searchMarker_, c, d);
-      }
-    );
-    //     google.maps.event.addListener(
-    //       picasa.geoPanelData.searchMarker_,
-    picasa.geoPanelData.searchMarker_.addEventListener(
-      'dragstart',
-      function () {
-        picasa.geoPanelData.infoWindow_.setShow(!1);
-      }
-    );
-    //     google.maps.event.addListener(
-    //       picasa.geoPanelData.searchMarker_,
-    picasa.geoPanelData.searchMarker_.addEventListener(
-      'dragend',
-      function () {
-        picasa.openMarkerInfoWindow(picasa.geoPanelData.searchMarker_, c, d);
-      }
-    );
-    return picasa.geoPanelData.searchMarker_;
-  }
+  // a = position (LatLng), b = thumbnail, d = message, c = address
+  var g = picasa.geoPanelData;
+  if (!g || !g.map_) return null;
+  picasa.removeSearchMarker();
+  // [geotag] a is already a LatLng (the Leaflet port converted it again as a pixel -> NaN)
+  var ll = L.latLng(a);
+  var mk = L.marker(ll, {
+    draggable: !0,
+    icon: g.searchMarkerOptions_.icon,
+    zIndexOffset: 1000
+  }).addTo(g.map_);
+  g.searchMarker_ = mk;
+  g.SetMarkerPicasaData(mk, new picasa$markerData(-1, -1, b, ll, g.currNumSelected_));
+  mk.on('click', function () {
+    picasa.openMarkerInfoWindow(mk, c, d);
+  });
+  mk.on('dragstart', function () {
+    g.infoWindow_.setShow(!1);
+  });
+  mk.on('dragend', function () {
+    picasa.openMarkerInfoWindow(mk, c, d);
+  });
+  return mk;
 };
 picasa.fromContainerPixelToLatLng = function (a, b) {
-  //  var d = new google.maps.Point(a, b),
-  var d = L.point(a, b),
-    //     c = new google.maps.LatLng(0, 0);
-    c = L.latLng(0, 0);
-  picasa.geoPanelData.hiddenOverlay_ &&
-    //     (c = picasa.geoPanelData.hiddenOverlay_
-    //       .getProjection()
-    //       .fromContainerPixelToLatLng(d));
-    (c = picasa.geoPanelData.map_.containerPointToLatLng(d));
-  return c;
+  return picasa.geoPanelData.map_.containerPointToLatLng(L.point(a, b));
 };
 picasa.fromLatLngToContainerPixel = function (a) {
-  //  var b = new google.maps.Point(0, 0);
-  var b = L.point(0, 0);
-  picasa.geoPanelData.hiddenOverlay_ &&
-    //     (b = picasa.geoPanelData.hiddenOverlay_
-    //       .getProjection()
-    //       .fromLatLngToContainerPixel(a));
-    (b = picasa.geoPanelData.map_.latLngToContainerPoint(a));
-  return b;
+  return picasa.geoPanelData.map_.latLngToContainerPoint(a);
 };
+
+// Drag & drop of photos from Picasa onto the map (called by Picasa).
 picasa.beginDragAndDrop = function (a, b) {
-  if (picasa.geoPanelData.map_) {
-    var d = picasa.fromContainerPixelToLatLng(a, b);
-    picasa.createSearchMarker(d, '', '', '');
-  }
+  picasa.log('beginDragAndDrop - ' + a + ', ' + b);
+  try {
+    picasa.geoPanelData.map_ &&
+      picasa.createSearchMarker(picasa.fromContainerPixelToLatLng(a, b), '', '', '');
+  } catch (l) { return showError(l); }
 };
 picasa.updateDragAndDrop = function (a, b) {
-  if (picasa.geoPanelData.map_ && picasa.geoPanelData.searchMarker_) {
-    var d = picasa.fromContainerPixelToLatLng(a, b);
-    picasa.geoPanelData.searchMarker_.setPosition(d);
-  }
+  try {
+    picasa.geoPanelData.map_ &&
+      picasa.geoPanelData.searchMarker_ &&
+      picasa.geoPanelData.searchMarker_.setLatLng(picasa.fromContainerPixelToLatLng(a, b)); // [geotag] setPosition -> setLatLng
+  } catch (l) { return showError(l); }
 };
 picasa.endDragAndDrop = function (a, b, d, c, e) {
-  picasa.geoPanelData.map_ &&
-    (a ?
-      picasa.removeSearchMarker() :
-      null !== picasa.geoPanelData.searchMarker_ &&
-      ((a = picasa.fromContainerPixelToLatLng(b, d)),
-        picasa.createSearchMarker(a, e, c, ''),
-        picasa.openMarkerInfoWindow(picasa.geoPanelData.searchMarker_, '', c)));
+  // a = cancelled?, b/d = pixel x/y, c = message, e = thumbnail
+  picasa.log('endDragAndDrop - cancelled: ' + a + ', x: ' + b + ', y: ' + d);
+  try {
+    picasa.geoPanelData.map_ &&
+      (a ?
+        picasa.removeSearchMarker() :
+        null !== picasa.geoPanelData.searchMarker_ &&
+        (picasa.createSearchMarker(picasa.fromContainerPixelToLatLng(b, d), e, c, ''),
+          picasa.openMarkerInfoWindow(picasa.geoPanelData.searchMarker_, '', c)));
+  } catch (l) { return showError(l); }
 };
 picasa.setMapType = function () {};
 picasa.setNumSelected = function (a) {
-  picasa.geoPanelData.currNumSelected_ = a;
+  picasa.log('setNumSelected - ' + a);
+  picasa.geoPanelData && (picasa.geoPanelData.currNumSelected_ = a);
 };
+// [geotag] Re-entrancy guard: element.click() fires the button's onclick again.
+picasa.notifying_ = !1;
 picasa.notifyPicasa = function (a) {
-  var b = window.WebBrowserPicasaPlugin;
-  if (b)
-    try {
-      b.elementEventNotify(a, 'click');
-    } catch (d) {
-      alert(
-        'An exception occurred calling plugin. Error name: ' +
-        d.name +
-        '. Error message: ' +
-        d.message
-      );
-    }
-  document.getElementById(a).click();
+  if (picasa.notifying_) return;
+  picasa.notifying_ = !0;
+  try {
+    picasa.log('notifyPicasa - ' + a);
+    var b = window.WebBrowserPicasaPlugin;
+    if (b)
+      try {
+        b.elementEventNotify(a, 'click');
+      } catch (d) {
+        alert(
+          'An exception occurred calling plugin. Error name: ' +
+          d.name +
+          '. Error message: ' +
+          d.message
+        );
+      }
+    var el = document.getElementById(a);
+    el && el.click();
+  } finally {
+    picasa.notifying_ = !1;
+  }
 };
+
+// [geotag] Place search via Nominatim (OpenStreetMap), using JSONP.
+//          Called by Picasa: search(address, message, thumbnail).
+//          Light use only (Nominatim usage policy: max 1 request/second).
+picasa.searchSeq_ = 0;
 picasa.search = function (a, b, d) {
-  picasa.geoPanelData.map_ &&
-    picasa.geoPanelData.geocoder_ &&
-    picasa.geoPanelData.geocoder_.geocode({
-      address: a
-    }, function (a, e) {
-      if (e == google.maps.GeocoderStatus.OK && a && 0 != a.length) {
-        var f = a[0].formatted_address,
-          g = a[0].geometry.location;
-        picasa.geoPanelData.infoWindow_.setAutoPanning(!1);
-        picasa.geoPanelData.map_.setCenter(g);
-        picasa.createSearchMarker(g, d, b, f);
-        null !== picasa.geoPanelData.searchMarker_ &&
-          (picasa.openMarkerInfoWindow(picasa.geoPanelData.searchMarker_, f, b),
-            setTimeout(
-              'picasa.geoPanelData.infoWindow_.setAutoPanning(true);',
-              2e3
-            ));
-      } else picasa.log('picasa.search - No results, response code:' + e), (document.getElementById('searchErrorDiv').style.display = 'block');
-    });
+  picasa.log('search - ' + a);
+  var g = picasa.geoPanelData;
+  if (!g || !g.map_ || !a) return;
+  var errDiv = document.getElementById('searchErrorDiv');
+  errDiv && (errDiv.style.display = 'none');
+  var cbName = '_picasaGeocodeCb' + ++picasa.searchSeq_,
+    script = document.createElement('script'),
+    done = !1,
+    timer = null;
+  var cleanup = function () {
+    timer && clearTimeout(timer);
+    try {
+      delete window[cbName];
+    } catch (e) {
+      window[cbName] = undefined;
+    }
+    script.parentNode && script.parentNode.removeChild(script);
+  };
+  var fail = function (why) {
+    picasa.log('picasa.search - failed: ' + why);
+    errDiv && (errDiv.style.display = 'block');
+  };
+  window[cbName] = function (res) {
+    if (done) return;
+    done = !0;
+    cleanup();
+    try {
+      if (!res || !res.length) return fail('no result');
+      var r = res[0],
+        ll = L.latLng(parseFloat(r.lat), parseFloat(r.lon)),
+        bb = r.boundingbox;
+      g.infoWindow_.setAutoPanning(!1);
+      bb && 4 == bb.length ?
+        g.map_.fitBounds([[parseFloat(bb[0]), parseFloat(bb[2])], [parseFloat(bb[1]), parseFloat(bb[3])]], { maxZoom: 16 }) :
+        g.map_.setView(ll, 14);
+      picasa.createSearchMarker(ll, d, b, r.display_name);
+      null !== g.searchMarker_ && picasa.openMarkerInfoWindow(g.searchMarker_, r.display_name, b);
+      setTimeout(function () {
+        g.infoWindow_.setAutoPanning(!0);
+      }, 2e3);
+    } catch (l) {
+      showError(l);
+    }
+  };
+  timer = setTimeout(function () {
+    if (done) return;
+    done = !0;
+    cleanup();
+    fail('timeout');
+  }, 1e4);
+  script.src =
+    'https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' +
+    encodeURIComponent(a) +
+    '&json_callback=' + cbName;
+  document.getElementsByTagName('head')[0].appendChild(script);
 };
+
 picasa.ScriptQueueClass = (function () {
   var a = function () {
     var a = null,
@@ -1020,9 +864,10 @@ picasa.ScriptQueueClass = (function () {
         var c = d[0];
         d.shift();
         try {
-///          alert("eval(c): " + c);
           eval(c);
-        } catch (e) {}
+        } catch (e) {
+          picasa.log('SubmitQueue - error in: ' + String(c).substr(0, 80) + ' -> ' + e.message);
+        }
         this.scheduleQueueProcessing();
       }
     };
@@ -1068,4 +913,3 @@ window.notifyPicasa = picasa.notifyPicasa;
 window.SubmitQueue = SubmitQueue;
 window.search = picasa.search;
 window.StopQueue = StopQueue;
-
